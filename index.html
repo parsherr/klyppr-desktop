@@ -46,6 +46,44 @@
             </div>
         </div>
 
+        <div class="settings-group">
+            <h2>Audio Improvements</h2>
+            <div class="form-group">
+                <label><input type="checkbox" id="removeNoise"> Remove Background Noise</label>
+            </div>
+            <div class="form-group">
+                <label><input type="checkbox" id="normalizeAudio"> Normalize Audio (-13 LUFS)</label>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h2>Background Music</h2>
+            <div class="form-group">
+                <label><input type="checkbox" id="addMusic"> Add Background Music</label>
+            </div>
+            <div class="form-group">
+                <label>Music Library:</label>
+                <select id="musicLibrary"></select>
+                <button onclick="addMusicFile()">Add New Music</button>
+            </div>
+            <div class="form-group">
+                <label>Music Volume (dB):</label>
+                <input type="range" id="musicVolume" min="-30" max="0" value="-20">
+                <span id="musicVolumeLabel">-20 dB</span>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h2>Subtitles</h2>
+            <div class="form-group">
+                <label><input type="checkbox" id="generateSubtitles"> Generate & Add Subtitles</label>
+            </div>
+            <div class="form-group">
+                <label>API Key (Optional):</label>
+                <input type="text" id="apiKey" placeholder="Leave blank for local transcription">
+            </div>
+        </div>
+
         <button id="startBtn" onclick="startProcessing()" disabled>Start Processing</button>
 
         <div id="progress">
@@ -75,6 +113,32 @@
             }
         };
 
+        // Load music library on startup
+        document.addEventListener('DOMContentLoaded', () => {
+            ipcRenderer.send('get-music-library');
+        });
+
+        ipcRenderer.on('music-library-loaded', (event, musicFiles) => {
+            const musicLibrary = document.getElementById('musicLibrary');
+            musicLibrary.innerHTML = '';
+            musicFiles.forEach(file => {
+                const option = document.createElement('option');
+                option.value = file;
+                option.textContent = file;
+                musicLibrary.appendChild(option);
+            });
+        });
+
+        // Add new music file
+        function addMusicFile() {
+            ipcRenderer.send('select-music-file');
+        }
+
+        // Update music volume label
+        document.getElementById('musicVolume').addEventListener('input', (event) => {
+            document.getElementById('musicVolumeLabel').textContent = `${event.target.value} dB`;
+        });
+
         // Preset butonları için olay dinleyicileri
         document.querySelectorAll('.preset-btn').forEach(button => {
             button.addEventListener('click', () => {
@@ -102,9 +166,20 @@
             const params = {
                 inputPath: document.getElementById('inputPath').value,
                 outputPath: document.getElementById('outputPath').value,
+                // Silence params
                 silenceDb: document.getElementById('silenceDb').value,
                 minSilenceDuration: document.getElementById('minSilenceDuration').value,
-                paddingDuration: document.getElementById('paddingDuration').value
+                paddingDuration: document.getElementById('paddingDuration').value,
+                // Audio params
+                removeNoise: document.getElementById('removeNoise').checked,
+                normalizeAudio: document.getElementById('normalizeAudio').checked,
+                // Music params
+                addMusic: document.getElementById('addMusic').checked,
+                musicPath: document.getElementById('musicLibrary').value,
+                musicVolume: document.getElementById('musicVolume').value,
+                // Subtitle params
+                generateSubtitles: document.getElementById('generateSubtitles').checked,
+                apiKey: document.getElementById('apiKey').value,
             };
 
             document.getElementById('startBtn').disabled = true;

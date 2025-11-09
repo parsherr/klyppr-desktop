@@ -2,6 +2,9 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs-extra');
+const transcription = require('./modules/transcription');
+const audio = require('./modules/audio');
+const music = require('./modules/music');
 
 // Use FFmpeg from node_modules in development mode
 const isDev = process.env.NODE_ENV === 'development';
@@ -115,30 +118,119 @@ ipcMain.on('select-output', async (event) => {
 
 // Video processing
 ipcMain.on('start-processing', async (event, params) => {
+    await executeProcessingPipeline(event, params);
+});
+
+// Get music library
+ipcMain.on('get-music-library', async (event) => {
+    const musicDir = path.join(__dirname, 'library', 'musics');
     try {
-        const outputFile = path.join(
-            params.outputPath,
-            `processed_${path.basename(params.inputPath)}`
-        );
-
-        // Detect silences
-        const silenceRanges = await detectSilence(params.inputPath, params, event);
-
-        if (silenceRanges.length === 0) {
-            event.reply('log', 'No silence found, copying file...');
-            await fs.copyFile(params.inputPath, outputFile);
-            event.reply('completed', true);
-            return;
-        }
-
-        // Process video
-        await processVideo(params.inputPath, outputFile, silenceRanges, event);
-        event.reply('completed', true);
+        await fs.ensureDir(musicDir);
+        const files = await fs.readdir(musicDir);
+        event.reply('music-library-loaded', files);
     } catch (error) {
-        event.reply('log', `Error: ${error.message}`);
-        event.reply('completed', false);
+        event.reply('log', `Error loading music library: ${error.message}`);
     }
 });
+
+// Add new music file
+ipcMain.on('select-music-file', async (event) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openFile'],
+        filters: [{ name: 'Audio Files', extensions: ['mp3', 'wav', 'aac'] }]
+    });
+
+    if (!result.canceled && result.filePaths.length > 0) {
+        const sourcePath = result.filePaths[0];
+        const musicDir = path.join(__dirname, 'library', 'musics');
+        const destPath = path.join(musicDir, path.basename(sourcePath));
+        try {
+            await fs.copy(sourcePath, destPath);
+            // Reload the library for the UI
+            const files = await fs.readdir(musicDir);
+            event.reply('music-library-loaded', files);
+        } catch (error) {
+            event.reply('log', `Error adding music file: ${error.message}`);
+        }
+    }
+});
+
+async function executeProcessingPipeline(event, params) {
+    let currentPath = params.inputPath;
+    const tempDir = path.join(app.getPath('temp'), 'klyppr-processing');
+    const finalOutputFile = path.join(params.outputPath, `processed_${path.basename(params.inputPath)}`);
+
+    try {
+        await fs.ensureDir(tempDir);
+        event.reply('log', 'Starting processing pipeline...');
+
+        // Step 1: Transcription (if selected)
+        let srtPath = null;
+        if (params.generateSubtitles) {
+            event.reply('log', 'Transcription step...');
+            srtPath = await transcription.generateSrt(currentPath, params.apiKey, tempDir);
+        }
+
+        // Step 2: Noise Removal (if selected)
+        if (params.removeNoise) {
+            event.reply('log', 'Removing background noise...');
+            const outputPath = path.join(tempDir, `noise-removed_${path.basename(currentPath)}`);
+            await audio.cleanNoise(currentPath, outputPath);
+            currentPath = outputPath;
+        }
+
+        // Step 3: Silence Removal
+        event.reply('log', 'Detecting silences...');
+        const silenceRanges = await detectSilence(currentPath, params, event);
+        if (silenceRanges.length > 0) {
+            event.reply('log', 'Removing silences...');
+            const outputPath = path.join(tempDir, `silence-removed_${path.basename(currentPath)}`);
+            await processVideo(currentPath, outputPath, silenceRanges, event);
+            currentPath = outputPath;
+        } else {
+            event.reply('log', 'No silences to remove.');
+        }
+
+        // Step 4: Audio Normalization (if selected)
+        if (params.normalizeAudio) {
+            event.reply('log', 'Normalizing audio...');
+            const outputPath = path.join(tempDir, `normalized_${path.basename(currentPath)}`);
+            await audio.normalizeLoudness(currentPath, outputPath);
+            currentPath = outputPath;
+        }
+
+        // Step 5: Add Background Music (if selected)
+        if (params.addMusic && params.musicPath) {
+            event.reply('log', 'Adding background music...');
+            const musicPath = path.join(__dirname, 'library', 'musics', params.musicPath);
+            const outputPath = path.join(tempDir, `music-added_${path.basename(currentPath)}`);
+            await music.addBackgroundMusic(currentPath, musicPath, params.musicVolume, outputPath);
+            currentPath = outputPath;
+        }
+
+        // Step 6: Add Subtitles (if srtPath exists)
+        if (srtPath) {
+            event.reply('log', 'Adding subtitles...');
+            const outputPath = path.join(tempDir, `subtitled_${path.basename(currentPath)}`);
+            await transcription.burnSubtitles(currentPath, srtPath, outputPath);
+            currentPath = outputPath;
+        }
+
+        // Final Step: Copy to output directory
+        event.reply('log', `Processing complete. Finalizing file...`);
+        await fs.copy(currentPath, finalOutputFile);
+
+        event.reply('completed', true);
+
+    } catch (error) {
+        event.reply('log', `Pipeline Error: ${error.message}`);
+        event.reply('completed', false);
+    } finally {
+        // Clean up temp directory
+        await fs.remove(tempDir);
+        event.reply('log', 'Cleaned up temporary files.');
+    }
+}
 
 async function detectSilence(inputFile, params, event) {
     return new Promise((resolve, reject) => {
