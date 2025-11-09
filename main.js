@@ -162,28 +162,27 @@ async function executeProcessingPipeline(event, params) {
 
     try {
         await fs.ensureDir(tempDir);
-        event.reply('log', 'Starting processing pipeline...');
+        event.reply('progress', { status: 'Step 1: Initializing...' });
 
         // Step 1: Transcription (if selected)
-        let srtPath = null;
+        let assPath = null;
         if (params.generateSubtitles) {
-            event.reply('log', 'Transcription step...');
-            srtPath = await transcription.generateSrt(currentPath, params.apiKey, tempDir);
+            event.reply('progress', { status: 'Step 1/6: Generating subtitles...' });
+            assPath = await transcription.generateSubtitles(currentPath, params.apiKey, tempDir);
         }
 
         // Step 2: Noise Removal (if selected)
         if (params.removeNoise) {
-            event.reply('log', 'Removing background noise...');
+            event.reply('progress', { status: 'Step 2/6: Removing background noise...' });
             const outputPath = path.join(tempDir, `noise-removed_${path.basename(currentPath)}`);
             await audio.cleanNoise(currentPath, outputPath);
             currentPath = outputPath;
         }
 
         // Step 3: Silence Removal
-        event.reply('log', 'Detecting silences...');
+        event.reply('progress', { status: 'Step 3/6: Removing silences...' });
         const silenceRanges = await detectSilence(currentPath, params, event);
         if (silenceRanges.length > 0) {
-            event.reply('log', 'Removing silences...');
             const outputPath = path.join(tempDir, `silence-removed_${path.basename(currentPath)}`);
             await processVideo(currentPath, outputPath, silenceRanges, event);
             currentPath = outputPath;
@@ -193,7 +192,7 @@ async function executeProcessingPipeline(event, params) {
 
         // Step 4: Audio Normalization (if selected)
         if (params.normalizeAudio) {
-            event.reply('log', 'Normalizing audio...');
+            event.reply('progress', { status: 'Step 4/6: Normalizing audio...' });
             const outputPath = path.join(tempDir, `normalized_${path.basename(currentPath)}`);
             await audio.normalizeLoudness(currentPath, outputPath);
             currentPath = outputPath;
@@ -201,23 +200,23 @@ async function executeProcessingPipeline(event, params) {
 
         // Step 5: Add Background Music (if selected)
         if (params.addMusic && params.musicPath) {
-            event.reply('log', 'Adding background music...');
+            event.reply('progress', { status: 'Step 5/6: Adding background music...' });
             const musicPath = path.join(__dirname, 'library', 'musics', params.musicPath);
             const outputPath = path.join(tempDir, `music-added_${path.basename(currentPath)}`);
             await music.addBackgroundMusic(currentPath, musicPath, params.musicVolume, outputPath);
             currentPath = outputPath;
         }
 
-        // Step 6: Add Subtitles (if srtPath exists)
-        if (srtPath) {
-            event.reply('log', 'Adding subtitles...');
+        // Step 6: Add Subtitles (if assPath exists)
+        if (assPath) {
+            event.reply('progress', { status: 'Step 6/6: Adding subtitles...' });
             const outputPath = path.join(tempDir, `subtitled_${path.basename(currentPath)}`);
-            await transcription.burnSubtitles(currentPath, srtPath, outputPath);
+            await transcription.burnSubtitles(currentPath, assPath, outputPath);
             currentPath = outputPath;
         }
 
         // Final Step: Copy to output directory
-        event.reply('log', `Processing complete. Finalizing file...`);
+        event.reply('progress', { status: 'Finalizing...' });
         await fs.copy(currentPath, finalOutputFile);
 
         event.reply('completed', true);
